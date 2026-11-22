@@ -44,8 +44,13 @@ def get_checkpointer():
             return _SAVER
         try:
             from langgraph.checkpoint.postgres import PostgresSaver
+            from psycopg import Connection as PgConnection
 
-            saver = PostgresSaver.from_conn_string(_pg_url())
+            # from_conn_string 是上下文管理器（退出即关连接），长驻需自持连接
+            conn = PgConnection.connect(
+                _pg_url(), autocommit=True, prepare_threshold=0
+            )
+            saver = PostgresSaver(conn)
             saver.setup()
             _SAVER, _SAVER_KIND = saver, "postgres"
             logger.info("checkpointer: postgres (%s)", settings.checkpoint_table)

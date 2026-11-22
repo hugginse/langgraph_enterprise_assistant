@@ -22,6 +22,7 @@ __pycache__/
 
 # checkpoint fallback
 checkpoints/
+checkpoints.db*
 
 # editors / OS
 .vscode/

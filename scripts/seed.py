@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import func, select  # noqa: E402
 
 from app.core.config import settings  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
@@ -128,6 +128,30 @@ def main() -> None:
                     total_docs += 1
 
         print(f"完成：{len(folders)} 个知识库，{total_docs} 份文档候选")
+
+        # 向量化（M3）：推进全部 pending 文档
+        pending_ids = list(
+            db.scalars(select(Document.id).where(Document.status == "pending")).all()
+        )
+        if pending_ids:
+            from app.services.ingest import ingest_document
+
+            print(f"开始向量化 {len(pending_ids)} 份 pending 文档…")
+            for doc_id in pending_ids:
+                ingest_document(doc_id)
+            db.expire_all()
+            done = db.scalar(
+                select(func.count())
+                .select_from(Document)
+                .where(Document.status == "completed")
+            )
+            failed = db.scalar(
+                select(func.count()).select_from(Document).where(Document.status == "failed")
+            )
+            print(f"向量化完成：completed={done} failed={failed}")
+            if failed:
+                for d in db.scalars(select(Document).where(Document.status == "failed")):
+                    print(f"  [failed] {d.filename}: {d.error_msg[:120]}")
     finally:
         db.close()
 

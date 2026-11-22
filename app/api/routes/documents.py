@@ -1,13 +1,23 @@
-"""文档上传、列表与删除（M1 暂不向量化，status 恒为 pending）。
+"""文档上传、列表与删除（M3：BackgroundTasks 异步向量化）。
 
 类型白名单 txt/pdf/md/docx；50MB 限制；uuid stored_name 落盘 uploads/{stored_name}。
+状态机：pending → processing → completed|failed（失败写 error_msg）。
 """
 
 import logging
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -31,6 +41,7 @@ ALLOWED_TYPES = {"txt", "pdf", "md", "docx"}
 )
 async def upload_document(
     kb_id: int,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user: User = Depends(login_required),
     db: Session = Depends(get_db),
@@ -64,12 +75,16 @@ async def upload_document(
         stored_name=stored_name,
         file_type=ext,
         file_size=len(content),
-        status="pending",  # M1 不接向量化；M3 ingest 异步推进
+        status="pending",
         created_by=user.id,
     )
     db.add(doc)
     db.commit()
     db.refresh(doc)
+    if settings.ingest_on_upload:
+        from app.services.ingest import ingest_document  # noqa: PLC0415
+
+        background_tasks.add_task(ingest_document, doc.id)
     return DocumentOut.model_validate(doc)
 
 
@@ -117,7 +132,14 @@ def delete_document(
     except OSError as exc:
         logger.warning("删除上传文件失败 %s: %s", path, exc)
 
-    # Chroma 分块清理：M3 接通（M1 未向量化，无需处理）
+    # Chroma 分块清理（不存在时容忍）
+    from app.services import vector  # noqa: PLC0415
+
+    try:
+        vector.delete_doc(doc.kb_id, doc.id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Chroma 分块清理失败 doc=%s: %s", doc_id, exc)
+
     db.delete(doc)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

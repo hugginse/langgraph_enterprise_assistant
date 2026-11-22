@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     chroma_persist_dir: str = "chroma_data"
     upload_dir: str = "uploads"
     upload_max_mb: int = 50
+    ingest_on_upload: bool = True  # 测试/CI 置 false，避免依赖 Ollama
     max_rewrite_attempts: int = Field(default=2, ge=1, le=5)
     grade_with_llm: bool = False
     enable_node_sse: bool = True

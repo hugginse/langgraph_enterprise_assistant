@@ -18,6 +18,7 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["CHECKPOINT_ENABLED"] = "false"
 os.environ["CHROMA_PERSIST_DIR"] = str(ROOT / "chroma_data_test")
 os.environ["UPLOAD_DIR"] = str(ROOT / "uploads_test")
+os.environ["INGEST_ON_UPLOAD"] = "false"  # 测试不依赖 Ollama 向量化
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

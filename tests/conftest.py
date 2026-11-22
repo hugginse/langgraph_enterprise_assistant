@@ -52,6 +52,15 @@ def _migrate_test_db() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _reset_graph() -> Iterator[None]:
+    from app.services.rag_runtime import reset_graph
+
+    reset_graph()
+    yield
+    reset_graph()
+
+
+@pytest.fixture(autouse=True)
 def _clean_db() -> Iterator[None]:
     with engine.begin() as conn:
         conn.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))

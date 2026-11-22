@@ -112,3 +112,45 @@ def add_member(db, kb_id: int, user_id: int) -> KbMember:
     db.commit()
     db.refresh(member)
     return member
+
+
+class ScriptedChatModel:
+    """按脚本分块 yield 的 ChatModel 替身（真流式单测用）。"""
+
+    def __init__(self, chunks: list[tuple[str, str]] | None = None, *, fail: bool = False):
+        self.chunks = chunks if chunks is not None else [("delta", "默认回答")]
+        self.fail = fail
+        self.calls: list[dict] = []
+
+    def stream(self, *, system: str, messages: list[dict]):
+        self.calls.append({"system": system, "messages": messages})
+        if self.fail:
+            raise RuntimeError("scripted failure")
+        yield from self.chunks
+
+    @property
+    def fingerprint(self) -> str:
+        return "scripted/v1"
+
+
+class DeterministicFakeEmbeddings:
+    """可复现的确定性假向量（同文本恒同向量）。"""
+
+    def __init__(self, dim: int = 8, fingerprint: str = "fake/deterministic-v1"):
+        self.dim = dim
+        self._fp = fingerprint
+
+    @property
+    def fingerprint(self) -> str:
+        return self._fp
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        import hashlib
+
+        out: list[list[float]] = []
+        for t in texts:
+            digest = hashlib.sha256(t.encode("utf-8")).digest()
+            out.append(
+                [((digest[i % len(digest)] / 255.0) - 0.5) for i in range(self.dim)]
+            )
+        return out

@@ -17,5 +17,26 @@ services:
       timeout: 5s
       retries: 10
 
+  api:
+    build: .
+    container_name: lga-api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://rag:rag123@db:5432/langgraph_enterprise
+      # 容器内访问宿主机 Ollama
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    env_file:
+      - path: .env
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./chroma_data:/app/chroma_data
+      - ./uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   pgdata:

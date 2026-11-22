@@ -1,0 +1,16 @@
+.venv/
+.git/
+.gitignore
+.env
+uploads/
+chroma_data/
+checkpoints.db*
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+docs/
+tests/
+seed_docs/
+eval_report.md
+*.md
+!README.md

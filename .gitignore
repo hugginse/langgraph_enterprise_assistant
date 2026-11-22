@@ -1,0 +1,28 @@
+# uv
+.venv/
+
+# env / secrets
+.env
+
+# runtime data
+uploads/
+chroma_data/
+*.db
+*.sqlite3
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# checkpoint fallback
+checkpoints/
+
+# editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import (
     auth,
@@ -48,6 +49,9 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    # 纯静态 SPA：GET / → index.html（挂在全部 API 路由之后）
+    app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
     return app
 

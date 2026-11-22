@@ -97,6 +97,14 @@ function renderSessionList() {
     item.addEventListener("click", async (e) => {
       if (e.target.closest(".ren") || e.target.closest(".del")) return;
       S.sessionId = id;
+      const sess = S.sessions.find((x) => x.id === id);
+      if (sess && sess.kb_id) {
+        S.kbId = sess.kb_id;
+        for (const k of ["kb-select", "kb-select-2"]) {
+          const el = document.getElementById(k);
+          if (el) el.value = String(S.kbId);
+        }
+      }
       renderSessionList();
       await loadMessages(id);
     });
@@ -138,6 +146,13 @@ function wireEvents() {
       for (const other of ["kb-select", "kb-select-2"]) {
         const el = document.getElementById(other);
         if (el) el.value = String(S.kbId);
+      }
+      // 当前会话属于其它知识库 → 退出，下一次发送将绑定当前 kb 新建会话
+      const cur = S.sessions.find((x) => x.id === S.sessionId);
+      if (cur && cur.kb_id && cur.kb_id !== S.kbId) {
+        S.sessionId = null;
+        renderSessionList();
+        showEmpty();
       }
     });
   }
@@ -241,6 +256,9 @@ async function send() {
     return;
   }
   ta.value = "";
+  // 会话与所选知识库不一致 → 不带 session_id，由后端按当前 kb 新建会话
+  const bound = S.sessions.find((x) => x.id === S.sessionId);
+  const sessionId = bound && bound.kb_id && bound.kb_id !== S.kbId ? null : S.sessionId;
   S.streaming = true;
   document.getElementById("send-btn").disabled = true;
 
@@ -315,7 +333,7 @@ async function send() {
   };
 
   try {
-    await sseAsk(question, S.kbId, S.sessionId, {
+    await sseAsk(question, S.kbId, sessionId, {
       onNode: (d) => {
         nodeEl.innerHTML = `<span>${NODE_CN[d.node] || d.node}</span>`;
       },

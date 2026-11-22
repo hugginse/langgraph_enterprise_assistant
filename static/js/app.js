@@ -43,10 +43,10 @@ function buildSidebar() {
   });
 }
 
-// 路由守卫
+// 路由守卫（已在目标页时返回 null，避免原地重定向导致不渲染）
 setGuard((path) => {
   const user = getUser();
-  if (!user) return "#/login";
+  if (!user) return path === "#/login" ? null : "#/login";
   if (path.startsWith("#/admin") && user.role !== "admin") return "#/chat";
   return null;
 });

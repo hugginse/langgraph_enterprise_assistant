@@ -39,6 +39,24 @@ TABLES = (
 )
 
 
+def _ensure_test_database() -> None:
+    """测试库不存在则创建（CI service 仅预建 langgraph_enterprise）。"""
+    admin_url = TEST_DATABASE_URL.rsplit("/", 1)[0] + "/postgres"
+    try:
+        eng = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+        with eng.connect() as conn:
+            exists = conn.execute(
+                text(
+                    "SELECT 1 FROM pg_database WHERE datname='langgraph_enterprise_test'"
+                )
+            ).scalar()
+            if not exists:
+                conn.execute(text("CREATE DATABASE langgraph_enterprise_test"))
+        eng.dispose()
+    except Exception as exc:  # noqa: BLE001  连不上交给 alembic 报错
+        print(f"[conftest] ensure test database: {exc}")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _migrate_test_db() -> Iterator[None]:
     """测试库建表（Alembic 全量迁移；表结构变更后自动升级）。"""
@@ -46,6 +64,7 @@ def _migrate_test_db() -> Iterator[None]:
 
     from alembic import command
 
+    _ensure_test_database()
     cfg = Config(str(ROOT / "alembic.ini"))
     command.upgrade(cfg, "head")
     yield

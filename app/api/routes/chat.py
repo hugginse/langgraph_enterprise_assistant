@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import re
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -44,6 +45,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 _HISTORY_LIMIT = 6  # 近 3 轮
+
+_POLITE_PREFIX = re.compile(r"^(请问|你好|您好|麻烦|帮我|我想|想问|问一下|咨询一下?)\s*")
+_TRAILING_NOISE = re.compile(r"[？?！!。，．,、;；:：\"'“”‘’（）()【】\[\]《》<>\s]+$")
+_FILLER_TAIL = re.compile(r"(是什么|怎么回事|怎么样|怎么办|如何|哪些|吗|呢|呀|啊)+$")
+
+
+def derive_session_title(question: str, limit: int = 20) -> str:
+    """交互后自动命名：取提问的精简版（去客套/语气词/标点，限长）。"""
+    text = (question or "").strip()
+    if not text:
+        return "新会话"
+    text = _POLITE_PREFIX.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    prev = None
+    while prev != text:  # 客套前缀与尾部语气/标点可能多层嵌套，迭代剥除
+        prev = text
+        text = _FILLER_TAIL.sub("", text)
+        text = _TRAILING_NOISE.sub("", text)
+        text = _POLITE_PREFIX.sub("", text).strip()
+    if not text:
+        text = (question or "").strip()
+    if len(text) > limit:
+        text = text[:limit]
+    return text or "新会话"
 
 
 def _sse(event: str, data: dict) -> str:
@@ -130,7 +155,8 @@ def _persist_message(
         pdb.add(msg)
         sess = pdb.get(ChatSession, session_id)
         if sess is not None and not sess.title:
-            sess.title = question[:20]
+            # 首次回答落库时用问题精简版自动命名（交互完成后不再显示未命名会话）
+            sess.title = derive_session_title(question)
         pdb.commit()
         pdb.refresh(msg)
         return msg.id, status_v, confidence

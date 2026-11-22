@@ -207,3 +207,28 @@ def test_ask_unknown_kb_404(client, db):
         headers=auth_header(alice),
     )
     assert resp.status_code == 404
+
+
+def test_session_auto_named_after_first_ask(client, db):
+    """交互完成后会话按问题精简版自动命名，不再停留「未命名会话」。"""
+    _user, alice, kb = _setup_member(client, db)
+    _inject_graph(_good_retriever)
+
+    resp = client.post(
+        "/api/chat/ask",
+        json={"question": "请问员工请假需要提前几天申请？", "kb_id": kb.id},
+        headers=auth_header(alice),
+    )
+    assert resp.status_code == 200
+    events = parse_sse(resp.text)
+    names = [e for e, _ in events]
+    done = events[names.index("done")][1]
+
+    sessions = client.get("/api/chat/sessions", headers=auth_header(alice)).json()
+    sess = next(s for s in sessions if s["id"] == done["session_id"])
+    assert sess["title"], "首次回答后必须有标题"
+    assert sess["title"] != "未命名会话"
+    assert not sess["title"].startswith("请问")
+    assert "？" not in sess["title"] and "?" not in sess["title"]
+    assert len(sess["title"]) <= 20
+    assert "员工请假需要提前几天申请" in sess["title"]

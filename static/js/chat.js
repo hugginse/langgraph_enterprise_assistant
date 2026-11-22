@@ -1,6 +1,7 @@
 // 对话页（核心）：会话栏 CRUD、kb 选择、SSE 流式、引用卡、思考框、node 进度、feedback
+// 交互参照根目录 chat.js（预建会话、kb 过滤会话、details 折叠、48px 贴底、富文本），
+// 但保持本项目 API 契约（裸数组、data.text、lga_* 存储）与全局侧栏结构。
 import { api, sseAsk, toast } from "./api.js";
-import { navigate } from "./router.js";
 
 const S = {
   kbs: [],
@@ -41,7 +42,8 @@ export async function renderChat() {
   await loadSessions();
   wireEvents();
   if (S.sessions.length && !S.sessionId) {
-    S.sessionId = S.sessions[0].id;
+    const first = visibleSessions()[0];
+    if (first) S.sessionId = first.id;
   }
   renderSessionList();
   if (S.sessionId) await loadMessages(S.sessionId);
@@ -51,35 +53,49 @@ export async function renderChat() {
 function showEmpty() {
   document.getElementById("chat-msgs").innerHTML = `
     <div class="empty-hint">
-      <h2>开始提问</h2>
+      <h2>选择或新建会话，开始提问吧 👋</h2>
       <p>选择知识库后输入问题，回答将带引用与思考过程实时流出。</p>
     </div>`;
 }
 
+/** 会话列表只展示当前知识库的会话（前端过滤，避免 kb/会话错配）。 */
+function visibleSessions() {
+  return S.sessions.filter((s) => s.kb_id === S.kbId);
+}
+
 async function loadKbs() {
-  S.kbs = await api("/api/knowledge-bases");
+  S.kbs = await api("/api/knowledge-bases"); // 后端返回裸数组
   if (!S.kbId && S.kbs.length) S.kbId = S.kbs[0].id;
+  syncKbSelects();
+}
+
+function syncKbSelects() {
   for (const id of ["kb-select", "kb-select-2"]) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.innerHTML = S.kbs
-      .map((k) => `<option value="${k.id}" ${k.id === S.kbId ? "selected" : ""}>${esc(k.name)}</option>`)
+      .map(
+        (k) =>
+          `<option value="${k.id}" ${k.id === S.kbId ? "selected" : ""}>${esc(k.name)}</option>`
+      )
       .join("");
+    if (S.kbId) el.value = String(S.kbId);
   }
 }
 
 async function loadSessions() {
-  S.sessions = await api("/api/chat/sessions");
+  S.sessions = await api("/api/chat/sessions"); // 后端返回裸数组
 }
 
 function renderSessionList() {
   const el = document.getElementById("session-list");
   if (!el) return;
-  if (!S.sessions.length) {
-    el.innerHTML = `<div style="padding:16px;color:#94a3b8;font-size:13px">暂无会话，点右上 ＋ 新建</div>`;
+  const list = visibleSessions();
+  if (!list.length) {
+    el.innerHTML = `<div style="padding:16px;color:#94a3b8;font-size:13px">该知识库暂无会话，点右上 ＋ 新建</div>`;
     return;
   }
-  el.innerHTML = S.sessions
+  el.innerHTML = list
     .map(
       (s) => `
     <div class="session-item ${s.id === S.sessionId ? "active" : ""}" data-id="${s.id}">
@@ -97,14 +113,6 @@ function renderSessionList() {
     item.addEventListener("click", async (e) => {
       if (e.target.closest(".ren") || e.target.closest(".del")) return;
       S.sessionId = id;
-      const sess = S.sessions.find((x) => x.id === id);
-      if (sess && sess.kb_id) {
-        S.kbId = sess.kb_id;
-        for (const k of ["kb-select", "kb-select-2"]) {
-          const el = document.getElementById(k);
-          if (el) el.value = String(S.kbId);
-        }
-      }
       renderSessionList();
       await loadMessages(id);
     });
@@ -116,19 +124,19 @@ function renderSessionList() {
         await api(`/api/chat/sessions/${id}`, { method: "PATCH", body: { title } });
         s.title = title;
         renderSessionList();
+        toast("已重命名", "ok");
       } catch (err) {
         toast(err.message, "error");
       }
     });
     item.querySelector(".del").addEventListener("click", async () => {
-      if (!confirm("删除该会话及其全部消息？")) return;
+      if (!confirm("删除该会话？消息记录将一并删除。")) return;
       try {
         await api(`/api/chat/sessions/${id}`, { method: "DELETE" });
         S.sessions = S.sessions.filter((x) => x.id !== id);
         if (S.sessionId === id) {
-          S.sessionId = S.sessions[0]?.id || null;
-          if (S.sessionId) await loadMessages(S.sessionId);
-          else showEmpty();
+          S.sessionId = null;
+          showEmpty();
         }
         renderSessionList();
         toast("会话已删除", "ok");
@@ -140,23 +148,26 @@ function renderSessionList() {
 }
 
 function wireEvents() {
-  for (const id of ["kb-select", "kb-select-2"]) {
-    document.getElementById(id)?.addEventListener("change", (e) => {
-      S.kbId = Number(e.target.value);
-      for (const other of ["kb-select", "kb-select-2"]) {
-        const el = document.getElementById(other);
-        if (el) el.value = String(S.kbId);
-      }
-      // 当前会话属于其它知识库 → 退出，下一次发送将绑定当前 kb 新建会话
-      const cur = S.sessions.find((x) => x.id === S.sessionId);
-      if (cur && cur.kb_id && cur.kb_id !== S.kbId) {
-        S.sessionId = null;
-        renderSessionList();
-        showEmpty();
-      }
-    });
-  }
+  const onKbChange = (value) => {
+    S.kbId = Number(value);
+    syncKbSelects();
+    // 切换知识库 → 退出当前会话并清空消息（会话列表已按 kb 过滤）
+    S.sessionId = null;
+    renderSessionList();
+    showEmpty();
+  };
+  document.getElementById("kb-select")?.addEventListener("change", (e) =>
+    onKbChange(e.target.value)
+  );
+  document.getElementById("kb-select-2")?.addEventListener("change", (e) =>
+    onKbChange(e.target.value)
+  );
+
   document.getElementById("new-session")?.addEventListener("click", async () => {
+    if (!S.kbId) {
+      toast("请先选择知识库", "error");
+      return;
+    }
     try {
       const s = await api("/api/chat/sessions", {
         method: "POST",
@@ -195,16 +206,6 @@ async function loadMessages(sessionId) {
 }
 
 function renderHistoryMsg(m) {
-  const cites = (m.sources || [])
-    .map(
-      (c) => `
-    <div class="cite-card">
-      <div class="fname">${esc(c.file_name)}</div>
-      <div class="meta">#${c.chunk_index} · score ${Number(c.score).toFixed(3)}</div>
-      <div class="snip">${esc(c.snippet || "")}</div>
-    </div>`
-    )
-    .join("");
   return `
     <div class="msg user"><div class="role">我</div><div class="bubble">${esc(m.question)}</div></div>
     <div class="msg assistant">
@@ -212,8 +213,8 @@ function renderHistoryMsg(m) {
         ${m.confidence != null ? `<span class="badge ${m.status === "answered" ? "ok" : "warn"}">confidence ${Number(m.confidence).toFixed(2)}</span>` : ""}
         <span class="badge">${m.status === "answered" ? "已回答" : "证据不足"}</span>
       </div>
-      <div class="bubble">${esc(m.answer)}
-        ${cites ? `<div class="cite-cards">${cites}</div>` : ""}
+      <div class="bubble">${formatAnswer(m.answer)}
+        ${renderSources(m.sources || [])}
       </div>
       <div class="fb-row" data-msg="${m.id}">
         <button class="fb-up" title="有用">👍</button>
@@ -221,6 +222,34 @@ function renderHistoryMsg(m) {
         <span class="fb-tip" style="font-size:12px;color:#94a3b8"></span>
       </div>
     </div>`;
+}
+
+function renderSources(sources) {
+  if (!sources || !sources.length) return "";
+  return `
+    <div class="cite-cards">
+      <div class="cite-title">📎 引用来源（${sources.length}）</div>
+      ${sources
+        .map(
+          (c) => `
+        <details class="cite-card">
+          <summary>
+            <span class="fname">${esc(c.file_name || "未知文件")}</span>
+            <span class="meta">#${c.chunk_index ?? 0} · ${((c.score || 0) * 100).toFixed(1)}%</span>
+          </summary>
+          <div class="snip">${esc(c.snippet || "")}</div>
+        </details>`
+        )
+        .join("")}
+    </div>`;
+}
+
+function renderThinking(text) {
+  return `
+    <details class="thinking-box" open>
+      <summary>🤔 思考过程</summary>
+      <div class="thinking-body">${esc(text)}</div>
+    </details>`;
 }
 
 function bindFeedback(root) {
@@ -246,6 +275,18 @@ async function submitFb(row, messageId, score) {
   }
 }
 
+const NODE_CN = {
+  normalize: "预处理",
+  classify: "意图分类",
+  retrieve: "检索中",
+  grade: "相关性评分",
+  rewrite: "查询改写",
+  generate: "生成中",
+  cite: "引用整理",
+  validate: "校验中",
+  abstain: "证据不足",
+};
+
 async function send() {
   if (S.streaming) return;
   const ta = document.getElementById("question");
@@ -256,114 +297,113 @@ async function send() {
     return;
   }
   ta.value = "";
-  // 会话与所选知识库不一致 → 不带 session_id，由后端按当前 kb 新建会话
-  const bound = S.sessions.find((x) => x.id === S.sessionId);
-  const sessionId = bound && bound.kb_id && bound.kb_id !== S.kbId ? null : S.sessionId;
+
+  // 发送前预建会话（带标题），保证 session_id 与 kb 一致
+  if (!S.sessionId) {
+    try {
+      // 标题留空：首次回答落库时后端按问题精简版自动命名（交互完成后刷新可见）
+      const s = await api("/api/chat/sessions", {
+        method: "POST",
+        body: { title: "", kb_id: S.kbId },
+      });
+      S.sessions.unshift(s);
+      S.sessionId = s.id;
+      renderSessionList();
+    } catch (err) {
+      toast(err.message, "error");
+      return;
+    }
+  }
+
   S.streaming = true;
   document.getElementById("send-btn").disabled = true;
 
   const box = document.getElementById("chat-msgs");
   if (box.querySelector(".empty-hint")) box.innerHTML = "";
 
-  // 用户消息
   box.insertAdjacentHTML(
     "beforeend",
     `<div class="msg user"><div class="role">我</div><div class="bubble">${esc(question)}</div></div>`
   );
 
-  // 助手骨架
   const aid = `a-${Date.now()}`;
   box.insertAdjacentHTML(
     "beforeend",
     `<div class="msg assistant" id="${aid}">
       <div class="role">助手</div>
       <div class="node-progress"></div>
-      <div class="thinking-box hidden">
-        <div class="th-head"><span>🤔 思考过程</span><span class="th-toggle">收起 ▲</span></div>
-        <div class="th-body"></div>
-      </div>
-      <div class="bubble"><span class="answer-text"></span><span class="caret">▍</span>
-        <div class="cite-cards"></div>
+      <div class="cite-cards" id="${aid}-cites"></div>
+      <div class="bubble">
+        <details class="thinking-box" id="${aid}-think" open hidden>
+          <summary>🤔 思考过程</summary>
+          <div class="thinking-body"></div>
+        </details>
+        <span class="answer-text"></span><span class="cursor">▍</span>
       </div>
       <div class="fb-row hidden"></div>
     </div>`
   );
   const root = document.getElementById(aid);
   const nodeEl = root.querySelector(".node-progress");
-  const thBox = root.querySelector(".thinking-box");
-  const thBody = root.querySelector(".th-body");
+  const thinkBox = root.querySelector(`#${aid}-think`);
+  const thBody = thinkBox.querySelector(".thinking-body");
   const ansEl = root.querySelector(".answer-text");
-  const caret = root.querySelector(".caret");
-  const citeWrap = root.querySelector(".cite-cards");
+  const cursor = root.querySelector(".cursor");
+  const citeWrap = root.querySelector(`#${aid}-cites`);
   const fbRow = root.querySelector(".fb-row");
 
-  root.querySelector(".th-head").addEventListener("click", () => {
-    thBox.classList.toggle("collapsed");
-    root.querySelector(".th-toggle").textContent = thBox.classList.contains("collapsed")
-      ? "展开 ▼"
-      : "收起 ▲";
-  });
+  // 距底 48px 内才跟随滚动（architecture §10）
+  const stickToBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight < 48;
 
-  // rAF 批量刷新打字机
-  let pending = [];
+  let fullAnswer = ""; // 累计全文（rAF 批量重渲染，避免只渲染增量段）
+  let deltaDirty = false;
+  let pendingThinking = "";
   let rafId = 0;
   const flush = () => {
     rafId = 0;
-    if (pending.length) {
-      ansEl.textContent += pending.join("");
-      pending = [];
-      box.scrollTop = box.scrollHeight;
+    if (pendingThinking) {
+      thinkBox.hidden = false;
+      const stick = stickToBottom(thBody);
+      thBody.textContent += pendingThinking;
+      pendingThinking = "";
+      if (stick) thBody.scrollTop = thBody.scrollHeight;
+    }
+    if (deltaDirty) {
+      ansEl.innerHTML = formatAnswer(fullAnswer) + `<span class="cursor">▍</span>`;
+      deltaDirty = false;
+      if (stickToBottom(box)) box.scrollTop = box.scrollHeight;
     }
   };
-  const pushDelta = (t) => {
-    pending.push(t);
+  const schedule = () => {
     if (!rafId) rafId = requestAnimationFrame(flush);
   };
 
-  const NODE_CN = {
-    normalize: "预处理",
-    classify: "意图分类",
-    retrieve: "检索中",
-    grade: "相关性评分",
-    rewrite: "查询改写",
-    generate: "生成中",
-    cite: "引用整理",
-    validate: "校验中",
-    abstain: "证据不足",
-  };
-
+  let gotDone = false;
   try {
-    await sseAsk(question, S.kbId, sessionId, {
+    await sseAsk(question, S.kbId, S.sessionId, {
       onNode: (d) => {
         nodeEl.innerHTML = `<span>${NODE_CN[d.node] || d.node}</span>`;
       },
       onSources: (d) => {
-        const chunks = d.sources || [];
-        if (!chunks.length) {
-          citeWrap.innerHTML = `<div class="cite-card"><div class="fname">未检索到相关内容</div></div>`;
-        } else {
-          citeWrap.innerHTML = chunks
-            .map(
-              (c) => `
-            <div class="cite-card">
-              <div class="fname">${esc(c.file_name)}</div>
-              <div class="meta">#${c.chunk_index} · score ${Number(c.score).toFixed(3)}</div>
-              <div class="snip">${esc(c.snippet || "")}</div>
-            </div>`
-            )
-            .join("");
-        }
-        box.scrollTop = box.scrollHeight;
+        citeWrap.innerHTML = renderSources(d.sources || []);
+        if (stickToBottom(box)) box.scrollTop = box.scrollHeight;
       },
       onThinking: (d) => {
-        thBox.classList.remove("hidden");
-        thBody.textContent += d.text;
-        box.scrollTop = box.scrollHeight;
+        pendingThinking += d.text;
+        schedule();
       },
-      onDelta: (d) => pushDelta(d.text),
+      onDelta: (d) => {
+        fullAnswer += d.text;
+        deltaDirty = true;
+        schedule();
+      },
       onDone: (d) => {
-        if (rafId) cancelAnimationFrame(rafId), flush();
-        caret.remove();
+        gotDone = true;
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          flush();
+        }
+        cursor?.remove();
         nodeEl.innerHTML = "";
         const badge =
           d.status === "answered"
@@ -381,31 +421,51 @@ async function send() {
           <button class="fb-down">👎</button>
           <span class="fb-tip" style="font-size:12px;color:#94a3b8"></span>`;
         bindFeedback(root);
-        if (!S.sessionId) {
-          S.sessionId = d.session_id;
-          loadSessions().then(renderSessionList);
-        }
-        // 更新会话列表标题
-        const cur = S.sessions.find((x) => x.id === (S.sessionId || d.session_id));
-        if (cur && !cur.title) {
-          cur.title = question.slice(0, 20);
-          renderSessionList();
-        }
+        loadSessions()
+          .then(renderSessionList)
+          .catch(() => {});
       },
       onError: (d) => {
-        ansEl.textContent += `\n⚠️ ${d.message}`;
-        caret.remove();
+        ansEl.innerHTML = `<span class="error-text">⚠️ ${esc(d.message)}</span>`;
+        cursor?.remove();
         toast(d.message, "error");
       },
     });
+    // 流结束兜底：冲刷残留帧并去掉光标（无 done 时保留已生成内容）
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      flush();
+    }
+    root.querySelector(".cursor")?.remove();
+    void gotDone;
   } catch (e) {
-    ansEl.textContent += ansEl.textContent ? "" : `⚠️ ${e.message}`;
-    if (!ansEl.textContent) ansEl.textContent = `⚠️ ${e.message}`;
-    caret.remove();
+    ansEl.innerHTML = `<span class="error-text">⚠️ ${esc(e.message)}</span>`;
+    root.querySelector(".cursor")?.remove();
     toast(e.message, "error");
   } finally {
     S.streaming = false;
     document.getElementById("send-btn").disabled = false;
     box.scrollTop = box.scrollHeight;
   }
+}
+
+/* ---------- 文本格式化（先转义，再轻量 Markdown） ---------- */
+function formatAnswer(text) {
+  let html = esc(text);
+  const codes = [];
+  html = html.replace(/```([\s\S]*?)```/g, (_, c) => {
+    codes.push(c.trim());
+    return `\u0000CODE${codes.length - 1}\u0000`;
+  });
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // 依据引用：[文件名.ext] 或 [文件名.ext #3] → 醒目徽章
+  html = html.replace(
+    /\[([^\[\]]+?\.(?:md|txt|pdf|docx))(?:\s*#\s*(\d+))?\]/gi,
+    (_, file, n) =>
+      `<span class="cite-ref" title="回答依据来源">📎 ${file}${n ? ` #${n}` : ""}</span>`
+  );
+  html = html.replace(/\n/g, "<br>");
+  html = html.replace(/\u0000CODE(\d+)\u0000/g, (_, i) => `<pre>${codes[Number(i)]}</pre>`);
+  return html;
 }
